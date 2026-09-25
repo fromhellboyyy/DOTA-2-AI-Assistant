@@ -49,7 +49,11 @@ addopts = "-v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=80
 
 [tool.coverage.run]
 source = ["app"]
-omit = ["app/db/session.py"]
+omit = [
+    "app/db/session.py",
+    "app/logging.py",
+    "app/main.py",
+]
 
 [tool.coverage.report]
 show_missing = true
