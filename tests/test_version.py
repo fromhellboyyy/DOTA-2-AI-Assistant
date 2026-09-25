@@ -1,5 +1,6 @@
-import app
 from httpx import AsyncClient
+
+import app
 
 
 async def test_version_returns_current(client: AsyncClient) -> None:
