@@ -65,7 +65,7 @@ async def test_process_invalid_payload_returns_422(client: AsyncClient) -> None:
     with patch("app.api.v1.process.is_model_loaded", return_value=True):
         resp = await client.post(
             "/api/v1/process",
-            json={"duration": -100},  
+            json={"duration": -100},
         )
 
     assert resp.status_code == 422

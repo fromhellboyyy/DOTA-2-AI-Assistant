@@ -39,7 +39,7 @@ def test_load_model_retries_then_succeeds() -> None:
 
     assert call_count["n"] == 3
     assert model_module._model is mock_model
-    assert mock_sleep.call_count == 2 
+    assert mock_sleep.call_count == 2
 
 
 def test_load_model_all_retries_fail() -> None:
