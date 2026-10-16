@@ -7,9 +7,15 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
       LOG_LEVEL: INFO
       LOG_FORMAT: json
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
     depends_on:
       db:
         condition: service_healthy
+      mlflow:
+        condition: service_started
     networks:
       - backend
     deploy:
@@ -46,8 +52,72 @@ services:
       timeout: 3s
       retries: 5
 
+  mlflow-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    volumes:
+      - mlflow_pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: pgsty/silo:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.1
+    depends_on:
+      mlflow-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    command:
+      - sh
+      - -c
+      - |
+        pip install --no-cache-dir "psycopg[binary]" boto3 &&
+        mlflow server \
+          --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow \
+          --default-artifact-root s3://mlflow/ \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --allowed-hosts "*"
+    networks:
+      - backend
+
 volumes:
   pgdata:
+  mlflow_pgdata:
+  minio_data:
 
 networks:
   backend:
