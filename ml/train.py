@@ -15,7 +15,6 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 
-
 os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "minio")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "minio123")
@@ -26,7 +25,9 @@ mlflow.set_experiment("Dota 2 Win Prediction")
 df = pd.read_csv("ml/data/matches.csv")
 print(f"Загружено {len(df)} строк")
 
-# Препроцессинг 
+df = df[df["duration"] > 0].copy()
+print(f"После фильтрации: {len(df)} валидных матчей")
+
 features = ["duration", "radiant_score", "dire_score", "first_blood_time"]
 X = df[features]
 y = df["radiant_win"]
@@ -38,6 +39,7 @@ y = y[mask]
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
+
 
 def train_and_log(model, model_name, params):
     with mlflow.start_run(run_name=model_name) as run:
@@ -87,7 +89,6 @@ def train_and_log(model, model_name, params):
 
 results = {}
 
-# 1 Baseline: LogisticRegression
 lr_id, lr_acc = train_and_log(
     LogisticRegression(max_iter=1000, random_state=42),
     "LogisticRegression",
@@ -95,15 +96,13 @@ lr_id, lr_acc = train_and_log(
 )
 results["LogisticRegression"] = (lr_id, lr_acc)
 
-# 2 RandomForest
 rf_id, rf_acc = train_and_log(
     RandomForestClassifier(n_estimators=100, random_state=42),
-    "RandomForest",
-    {"n_estimators": 100},
+    "RandomForest_v2",
+    {"n_estimators": 150},
 )
 results["RandomForest"] = (rf_id, rf_acc)
 
-# 3 GradientBoosting
 gb_id, gb_acc = train_and_log(
     GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, random_state=42),
     "GradientBoosting",
@@ -111,16 +110,14 @@ gb_id, gb_acc = train_and_log(
 )
 results["GradientBoosting"] = (gb_id, gb_acc)
 
-# Выбираем лучшую модель по accuracy 
 best_name = max(results, key=lambda k: results[k][1])
 best_run_id, best_acc = results[best_name]
-print(f"\n Лучшая модель: {best_name} (accuracy={best_acc:.3f})")
+print(f"\nЛучшая модель: {best_name} (accuracy={best_acc:.3f})")
 
-# Регистрируем лучшую модель в Model Registry 
 model_uri = f"runs:/{best_run_id}/model"
 try:
     registered = mlflow.register_model(model_uri, "Dota2WinPredictor")
     print(f"Модель зарегистрирована. Version: {registered.version}")
-    print(f"Не забудь поставить alias 'champion' в MLflow UI!")
+    print("Не забудь поставить alias 'champion' в MLflow UI!")
 except Exception as e:
     print(f"Не удалось зарегистрировать модель: {e}")

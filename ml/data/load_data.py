@@ -5,11 +5,16 @@ import requests
 import pandas as pd
 import mlflow
 
+os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "minio")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "minio123")
+
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 OPENDOTA_API_BASE = "https://api.opendota.com/api"
 DATA_DIR = "ml/data"
 CSV_PATH = os.path.join(DATA_DIR, "matches.csv")
-REQUEST_DELAY_SEC = 3
+REQUEST_DELAY_SEC = 2
+
 
 def compute_dataset_digest(file_path: str) -> str:
     sha256 = hashlib.sha256()
@@ -18,9 +23,9 @@ def compute_dataset_digest(file_path: str) -> str:
             sha256.update(chunk)
     return sha256.hexdigest()
 
+
 def fetch_matches(limit: int = 100) -> pd.DataFrame:
     os.makedirs(DATA_DIR, exist_ok=True)
-
     print(f"Запрос к {OPENDOTA_API_BASE}/publicMatches ...")
     response = requests.get(f"{OPENDOTA_API_BASE}/publicMatches", timeout=30)
     response.raise_for_status()
@@ -35,30 +40,34 @@ def fetch_matches(limit: int = 100) -> pd.DataFrame:
         try:
             detail_url = f"{OPENDOTA_API_BASE}/matches/{match_id}"
             detail = requests.get(detail_url, timeout=30).json()
+            if detail.get("duration", 0) == 0:
+                print(f"  Пропуск: матч с duration=0")
+                continue
+            if "radiant_win" not in detail:
+                print(f"  Пропуск: нет radiant_win")
+                continue
 
-            if "duration" in detail and "radiant_win" in detail:
-                detailed_matches.append({
-                    "match_id": match_id,
-                    "duration": detail.get("duration"),
-                    "radiant_win": 1 if detail.get("radiant_win") else 0,
-                    "radiant_score": detail.get("radiant_score", 0),
-                    "dire_score": detail.get("dire_score", 0),
-                    "game_mode": detail.get("game_mode"),
-                    "lobby_type": detail.get("lobby_type"),
-                    "first_blood_time": detail.get("first_blood_time", 0),
-                })
+            detailed_matches.append({
+                "match_id": match_id,
+                "duration": detail.get("duration"),
+                "radiant_win": 1 if detail.get("radiant_win") else 0,
+                "radiant_score": detail.get("radiant_score", 0),
+                "dire_score": detail.get("dire_score", 0),
+                "game_mode": detail.get("game_mode"),
+                "lobby_type": detail.get("lobby_type"),
+                "first_blood_time": detail.get("first_blood_time", 0),
+            })
         except Exception as e:
-            print(f" Ошибка при загрузке {match_id}: {e}")
-
+            print(f"  Ошибка при загрузке {match_id}: {e}")
         time.sleep(REQUEST_DELAY_SEC)
 
     df = pd.DataFrame(detailed_matches)
     df.to_csv(CSV_PATH, index=False)
-    print(f"Сохранено {len(df)} матчей в {CSV_PATH}")
+    print(f"Сохранено {len(df)} валидных матчей в {CSV_PATH}")
     return df
 
+
 def log_dataset_to_mlflow():
-    """Регистрирует датасет в MLflow с указанием source и digest."""
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment("Dota 2 Dataset Tracking")
 
@@ -73,5 +82,7 @@ def log_dataset_to_mlflow():
         mlflow.log_param("dataset_columns", ", ".join(df.columns))
         print(f"Датасет залогирован в MLflow. Digest: {digest}")
 
+
 if __name__ == "__main__":
+    fetch_matches(limit=150)
     log_dataset_to_mlflow()
