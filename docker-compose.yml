@@ -11,6 +11,7 @@ services:
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       AWS_ACCESS_KEY_ID: minio
       AWS_SECRET_ACCESS_KEY: minio123
+      RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
     depends_on:
       db:
         condition: service_healthy
@@ -114,10 +115,30 @@ services:
     networks:
       - backend
 
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbit
+      RABBITMQ_DEFAULT_PASS: rabbit
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
 volumes:
   pgdata:
   mlflow_pgdata:
   minio_data:
+  rabbitmq_data:
 
 networks:
   backend:
