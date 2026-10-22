@@ -1,3 +1,4 @@
+import mlflow.data
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -40,9 +41,15 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
+dataset = mlflow.data.from_pandas(
+    df,
+    source="ml/data/raw_matches.csv",
+    name="dota2_matches"
+)
 
 def train_and_log(model, model_name, params):
     with mlflow.start_run(run_name=model_name) as run:
+        mlflow.log_input(dataset, context="training")
         mlflow.log_params(params)
         mlflow.log_param("model_type", model.__class__.__name__)
         mlflow.log_param("train_size", len(X_train))
