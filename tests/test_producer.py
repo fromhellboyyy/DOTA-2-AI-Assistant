@@ -15,9 +15,7 @@ async def test_producer_main_backpressure():
             new_callable=AsyncMock,
             return_value=25,
         ),
-        patch(
-            "app.producer.asyncio.sleep", new_callable=AsyncMock
-        ) as mock_sleep,
+        patch("app.producer.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
     ):
         mock_broker = AsyncMock()
         mock_broker_class.return_value = mock_broker
@@ -46,9 +44,7 @@ async def test_producer_main_normal_publish():
             new_callable=AsyncMock,
             return_value=5,
         ),
-        patch(
-            "app.producer.asyncio.sleep", new_callable=AsyncMock
-        ) as mock_sleep,
+        patch("app.producer.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
     ):
         mock_broker = AsyncMock()
         mock_broker_class.return_value = mock_broker
