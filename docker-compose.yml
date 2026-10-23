@@ -38,6 +38,7 @@ services:
   worker:
     build: .
     command: [ "python", "-m", "app.worker" ]
+    stop_grace_period: 30s
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
       MLFLOW_TRACKING_URI: http://mlflow:5000

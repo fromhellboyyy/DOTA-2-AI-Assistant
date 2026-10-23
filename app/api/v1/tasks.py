@@ -7,9 +7,8 @@ from pydantic import BaseModel
 
 from app.broker import broker
 from app.db.results import get_result
+from app.queues import MAIN_QUEUE, MAX_QUEUE_SIZE
 
-QUEUE_NAME = os.getenv("QUEUE_NAME", "dota_inference_queue")
-MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "20"))
 INFERENCE_DELAY_SEC = float(os.getenv("INFERENCE_DELAY_SEC", "0.5"))
 CONCURRENCY_PER_WORKER = int(os.getenv("CONCURRENCY_LIMIT", "2"))
 WORKER_REPLICAS = int(os.getenv("WORKER_REPLICAS", "1"))
@@ -38,7 +37,7 @@ async def create_task(request: TaskRequest):
         "first_blood_time": request.first_blood_time,
     }
     try:
-        await broker.publish(payload, queue=QUEUE_NAME, persistent=True)
+        await broker.publish(payload, queue=MAIN_QUEUE)
     except DeliveryError as exc:
         raise HTTPException(
             status_code=503,

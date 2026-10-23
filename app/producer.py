@@ -7,11 +7,11 @@ from aio_pika.exceptions import DeliveryError
 from faststream.rabbit import RabbitBroker
 
 from app.broker import RABBITMQ_URL
+from app.queues import MAIN_QUEUE
 
 logger = structlog.get_logger(__name__)
 
 CSV_PATH = os.getenv("SCORING_CSV", "ml/data/matches.csv")
-QUEUE_NAME = os.getenv("QUEUE_NAME", "dota_inference_queue")
 RETRY_DELAY_SEC = float(os.getenv("PUBLISH_RETRY_DELAY_SEC", "0.5"))
 MAX_BACKOFF_SEC = float(os.getenv("PUBLISH_MAX_BACKOFF_SEC", "5.0"))
 
@@ -33,7 +33,7 @@ async def publish_all(df: pd.DataFrame) -> tuple[int, int]:
             delay = RETRY_DELAY_SEC
             while True:
                 try:
-                    await broker.publish(task, queue=QUEUE_NAME, persistent=True)
+                    await broker.publish(task, queue=MAIN_QUEUE)
                     published += 1
                     break
                 except DeliveryError:
@@ -48,7 +48,7 @@ async def publish_all(df: pd.DataFrame) -> tuple[int, int]:
             if published % 20 == 0:
                 logger.info("progress", published=published, nacks=nacks)
     finally:
-        await broker.close()
+        await broker.stop()
     return published, nacks
 
 

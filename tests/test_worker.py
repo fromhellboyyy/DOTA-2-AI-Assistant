@@ -115,19 +115,31 @@ async def test_health_handler():
 
 @pytest.mark.asyncio
 async def test_process_task_retries_then_dead_letters(monkeypatch):
+    from concurrent.futures import Future
+
     import app.worker
 
     class FailModel:
         def predict(self, df):
             raise RuntimeError("boom")
 
+    class SyncExecutor:
+        def submit(self, fn, *args, **kwargs):
+            f = Future()
+            try:
+                f.set_result(fn(*args, **kwargs))
+            except Exception as e:
+                f.set_exception(e)
+            return f
+
     monkeypatch.setattr(app.worker, "model", FailModel())
     monkeypatch.setattr(app.worker, "INFERENCE_DELAY_SEC", 0.0)
     monkeypatch.setattr(app.worker, "MAX_RETRIES", 2)
+    monkeypatch.setattr(app.worker, "executor", SyncExecutor())
 
     published = []
 
-    async def fake_publish(body, *, queue, persistent):
+    async def fake_publish(body, *, queue):
         published.append((queue, body.get("attempt")))
 
     with patch.object(app.worker.broker, "publish", side_effect=fake_publish):
@@ -150,6 +162,6 @@ async def test_process_task_retries_then_dead_letters(monkeypatch):
         )
         await app.worker.process_task(msg2)
 
-    assert published[0][0] == app.worker.QUEUE_NAME
+    assert published[0][0] is app.worker.MAIN_QUEUE
     assert published[0][1] == 1
-    assert published[1][0] == app.worker.DLQ_NAME
+    assert published[1][0] is app.worker.DLQ
