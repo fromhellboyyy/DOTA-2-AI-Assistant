@@ -1,5 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -29,8 +31,7 @@ def test_version():
 @patch("app.api.v1.process.predict")
 @patch("app.api.v1.process.is_model_loaded", return_value=True)
 def test_process_success(mock_loaded, mock_predict):
-    mock_predict.return_value = {"prediction": 1, "meaning": "Radiant Win"}
-
+    mock_predict.return_value = 1
     response = client.post(
         "/api/v1/process",
         json={
@@ -40,7 +41,6 @@ def test_process_success(mock_loaded, mock_predict):
             "first_blood_time": 120.0,
         },
     )
-
     assert response.status_code == 200
     assert "prediction" in response.json()
 
@@ -56,7 +56,6 @@ def test_process_model_not_loaded(mock_loaded):
             "first_blood_time": 120.0,
         },
     )
-
     assert response.status_code == 503
 
 
@@ -65,7 +64,6 @@ def test_process_model_not_loaded(mock_loaded):
 @patch("app.api.v1.tasks.broker")
 def test_create_task_success(mock_broker, mock_depth):
     mock_broker.publish = AsyncMock()
-
     response = client.post(
         "/api/v1/tasks",
         json={
@@ -75,7 +73,6 @@ def test_create_task_success(mock_broker, mock_depth):
             "first_blood_time": 120.0,
         },
     )
-
     assert response.status_code == 202
     assert "task_id" in response.json()
 
@@ -91,6 +88,20 @@ def test_create_task_overload(mock_depth):
             "first_blood_time": 120.0,
         },
     )
-
     assert response.status_code == 503
-    assert "retry-after" in response.headers
+    headers_lower = {k.lower(): v for k, v in response.headers.items()}
+    assert "retry-after" in headers_lower
+
+
+@pytest.mark.asyncio
+async def test_get_queue_depth_request_error():
+    """Тест обработки ошибки запроса при получении глубины очереди"""
+    with patch("app.api.v1.tasks.httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = httpx.RequestError("connection failed")
+
+        from app.api.v1.tasks import get_queue_depth
+
+        result = await get_queue_depth()
+        assert result == 0
