@@ -1,4 +1,5 @@
 import uuid
+
 import httpx
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ async def get_queue_depth() -> int:
         try:
             response = await client.get(url, auth=("rabbit", "rabbit"))
             if response.status_code == 200:
-                return response.json().get('messages', 0)
+                return response.json().get("messages", 0)
         except httpx.RequestError:
             pass
     return 0
@@ -38,8 +39,7 @@ async def create_task(request: TaskRequest, response: Response):
     if queue_depth >= MAX_QUEUE_SIZE:
         response.headers["Retry-After"] = "5"
         raise HTTPException(
-            status_code=503,
-            detail="Service overloaded. Queue is full. Please retry later."
+            status_code=503, detail="Service overloaded. Queue is full. Please retry later."
         )
 
     task_id = str(uuid.uuid4())

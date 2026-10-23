@@ -1,14 +1,12 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from app.api.v1.tasks import router as tasks_router
-
-
 import structlog
 from fastapi import FastAPI
 
 from app.api.healthz import router as healthz_router
 from app.api.v1.router import v1_router
+from app.api.v1.tasks import router as tasks_router
 from app.config import settings
 from app.logger import setup_logging
 from app.ml.model import load_model

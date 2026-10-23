@@ -1,12 +1,14 @@
-import os
 import asyncio
+import os
+
 import mlflow
 import mlflow.pyfunc
-import structlog
-from pydantic import BaseModel, Field
-from faststream.rabbit import RabbitBroker, RabbitQueue
-from app.broker import broker
 import pandas as pd
+import structlog
+from faststream.rabbit import RabbitQueue
+from pydantic import BaseModel, Field
+
+from app.broker import broker
 
 os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "minio")
@@ -46,10 +48,7 @@ async def load_model():
     queue=RabbitQueue(
         "dota_inference_queue",
         durable=True,
-        arguments={
-            "x-max-length": 20,
-            "x-overflow": "reject-publish"
-        }
+        arguments={"x-max-length": 20, "x-overflow": "reject-publish"},
     )
 )
 async def process_task(msg: TaskMessage):
@@ -58,20 +57,20 @@ async def process_task(msg: TaskMessage):
     async with semaphore:
         await asyncio.sleep(INFERENCE_DELAY_SEC)
 
-        features_df = pd.DataFrame([{
-            "duration": msg.duration,
-            "radiant_score": msg.radiant_score,
-            "dire_score": msg.dire_score,
-            "first_blood_time": msg.first_blood_time,
-        }])
+        features_df = pd.DataFrame(
+            [
+                {
+                    "duration": msg.duration,
+                    "radiant_score": msg.radiant_score,
+                    "dire_score": msg.dire_score,
+                    "first_blood_time": msg.first_blood_time,
+                }
+            ]
+        )
 
         prediction = await asyncio.to_thread(model.predict, features_df)
 
-        result = {
-            "task_id": msg.task_id,
-            "prediction": int(prediction[0]),
-            "probability": 0.95
-        }
+        result = {"task_id": msg.task_id, "prediction": int(prediction[0]), "probability": 0.95}
 
         logger.info("task_completed", task_id=msg.task_id, prediction=result["prediction"])
         return result

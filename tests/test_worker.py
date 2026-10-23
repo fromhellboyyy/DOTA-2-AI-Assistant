@@ -1,9 +1,9 @@
-import pytest
 import asyncio
-from unittest.mock import AsyncMock, patch
+
+import pytest
 from faststream.rabbit import TestRabbitBroker
-from pydantic import BaseModel
-from app.worker import broker, process_task, TaskMessage
+
+from app.worker import TaskMessage, broker
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +37,6 @@ async def test_process_task_success():
 
 @pytest.mark.asyncio
 async def test_process_task_invalid_data():
-    """Тест обработки задачи с невалидными данными"""
     async with TestRabbitBroker(broker) as br:
         task = TaskMessage(
             task_id="test-invalid",
@@ -46,7 +45,6 @@ async def test_process_task_invalid_data():
             dire_score=0.0,
             first_blood_time=0.0,
         )
-
         await br.publish(task, queue="dota_inference_queue")
         await asyncio.sleep(0.1)
 
