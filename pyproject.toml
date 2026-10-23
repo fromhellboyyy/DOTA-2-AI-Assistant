@@ -20,12 +20,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.16.8",
+    "ruff>=0.8.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
     "httpx>=0.28.0",
     "pre-commit>=4.0.0",
+    "testcontainers>=4.8.0",
+    "aio-pika>=10.0.0",
 ]
 ml = [
     "scikit-learn>=1.4.0",
@@ -35,6 +37,15 @@ ml = [
     "jupyter>=1.0.0",
     "ipykernel>=6.29.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:The wait_for_logs function:DeprecationWarning",
+]
+addopts = "-v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=80"
+markers = ["integration: requires Docker (Testcontainers)"]
 
 [build-system]
 requires = ["hatchling"]
@@ -57,16 +68,10 @@ known-first-party = ["app"]
 quote-style = "double"
 indent-style = "space"
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-addopts = "-v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=60"
-
 [tool.coverage.run]
 source = ["app"]
 omit = [
     "app/db/session.py",
-    "app/logging.py",
     "app/main.py",
 ]
 

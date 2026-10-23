@@ -1,7 +1,6 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
-import pytest
+from aio_pika.exceptions import DeliveryError
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -9,25 +8,21 @@ from app.main import app
 client = TestClient(app)
 
 
-# Тесты для /healthz
 def test_healthz():
     response = client.get("/healthz")
     assert response.status_code == 200
 
 
-# Тесты для /api/v1/health
 def test_health():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
 
 
-# Тесты для /api/v1/version
 def test_version():
     response = client.get("/api/v1/version")
     assert response.status_code == 200
 
 
-# Тесты для /api/v1/process
 @patch("app.api.v1.process.predict")
 @patch("app.api.v1.process.is_model_loaded", return_value=True)
 def test_process_success(mock_loaded, mock_predict):
@@ -59,10 +54,8 @@ def test_process_model_not_loaded(mock_loaded):
     assert response.status_code == 503
 
 
-# Тесты для /api/v1/tasks (Load Shedding)
-@patch("app.api.v1.tasks.get_queue_depth", return_value=0)
 @patch("app.api.v1.tasks.broker")
-def test_create_task_success(mock_broker, mock_depth):
+def test_create_task_success(mock_broker):
     mock_broker.publish = AsyncMock()
     response = client.post(
         "/api/v1/tasks",
@@ -77,8 +70,9 @@ def test_create_task_success(mock_broker, mock_depth):
     assert "task_id" in response.json()
 
 
-@patch("app.api.v1.tasks.get_queue_depth", return_value=25)
-def test_create_task_overload(mock_depth):
+@patch("app.api.v1.tasks.broker")
+def test_create_task_overload(mock_broker):
+    mock_broker.publish = AsyncMock(side_effect=DeliveryError(MagicMock(), MagicMock()))
     response = client.post(
         "/api/v1/tasks",
         json={
@@ -93,15 +87,16 @@ def test_create_task_overload(mock_depth):
     assert "retry-after" in headers_lower
 
 
-@pytest.mark.asyncio
-async def test_get_queue_depth_request_error():
-    """Тест обработки ошибки запроса при получении глубины очереди"""
-    with patch("app.api.v1.tasks.httpx.AsyncClient") as mock_client_class:
-        mock_client = AsyncMock()
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        mock_client.get.side_effect = httpx.RequestError("connection failed")
+@patch("app.api.v1.tasks.get_result", new_callable=AsyncMock)
+def test_task_result_found(mock_get):
+    mock_get.return_value = {"task_id": "123", "prediction": 1}
+    response = client.get("/api/v1/tasks/123")
+    assert response.status_code == 200
+    assert response.json()["prediction"] == 1
 
-        from app.api.v1.tasks import get_queue_depth
 
-        result = await get_queue_depth()
-        assert result == 0
+@patch("app.api.v1.tasks.get_result", new_callable=AsyncMock)
+def test_task_result_not_found(mock_get):
+    mock_get.return_value = None
+    response = client.get("/api/v1/tasks/999")
+    assert response.status_code == 404

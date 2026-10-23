@@ -35,6 +35,42 @@ services:
       timeout: 5s
       retries: 3
 
+  worker:
+    build: .
+    command: [ "python", "-m", "app.worker" ]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
+      INFERENCE_DELAY_SEC: "0.5"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    networks:
+      - backend
+
+  producer:
+    build: .
+    profiles: [ "tools" ]
+    command: [ "python", "-m", "app.producer" ]
+    environment:
+      RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
+      SCORING_CSV: ml/data/matches.csv
+    volumes:
+      - ./ml/data:/app/ml/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+
   db:
     image: postgres:16-alpine
     environment:

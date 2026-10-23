@@ -1,73 +1,63 @@
 import asyncio
 import os
-import uuid
 
-import aiohttp
+import pandas as pd
+import structlog
+from aio_pika.exceptions import DeliveryError
 from faststream.rabbit import RabbitBroker
-from pydantic import BaseModel
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://rabbit:rabbit@localhost:5672/")
-RABBITMQ_MANAGEMENT_URL = "http://localhost:15672"
-QUEUE_NAME = "dota_inference_queue"
-MAX_QUEUE_SIZE = 20
+from app.broker import RABBITMQ_URL
 
+logger = structlog.get_logger(__name__)
 
-class TaskMessage(BaseModel):
-    task_id: str
-    duration: float
-    radiant_score: float
-    dire_score: float
-    first_blood_time: float
+CSV_PATH = os.getenv("SCORING_CSV", "ml/data/matches.csv")
+QUEUE_NAME = os.getenv("QUEUE_NAME", "dota_inference_queue")
+RETRY_DELAY_SEC = float(os.getenv("PUBLISH_RETRY_DELAY_SEC", "0.5"))
+MAX_BACKOFF_SEC = float(os.getenv("PUBLISH_MAX_BACKOFF_SEC", "5.0"))
 
 
-async def get_queue_depth() -> int:
-    """Проверяет глубину очереди через RabbitMQ Management API"""
-    url = f"{RABBITMQ_MANAGEMENT_URL}/api/queues/%2f/{QUEUE_NAME}"
-    auth = aiohttp.BasicAuth("rabbit", "rabbit")
-    async with (
-        aiohttp.ClientSession() as session,
-        session.get(url, auth=auth) as response,
-    ):
-        if response.status == 200:
-            data = await response.json()
-            return data.get("messages", 0)
-    return 0
-
-
-async def main():
+async def publish_all(df: pd.DataFrame) -> tuple[int, int]:
     broker = RabbitBroker(RABBITMQ_URL)
     await broker.connect()
-
-    tasks_published = 0
-    backpressure_hits = 0
-
+    published = 0
+    nacks = 0
     try:
-        while True:
-            queue_depth = await get_queue_depth()
+        for row in df.itertuples(index=False):
+            task = {
+                "task_id": f"score-{row.match_id}",
+                "duration": float(row.duration),
+                "radiant_score": float(row.radiant_score),
+                "dire_score": float(row.dire_score),
+                "first_blood_time": float(row.first_blood_time),
+            }
+            delay = RETRY_DELAY_SEC
+            while True:
+                try:
+                    await broker.publish(task, queue=QUEUE_NAME, persistent=True)
+                    published += 1
+                    break
+                except DeliveryError:
+                    nacks += 1
+                    logger.warning(
+                        "backpressure_nack",
+                        task_id=task["task_id"],
+                        retry_in_sec=delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, MAX_BACKOFF_SEC)
+            if published % 20 == 0:
+                logger.info("progress", published=published, nacks=nacks)
+    finally:
+        await broker.close()
+    return published, nacks
 
-            if queue_depth >= MAX_QUEUE_SIZE:
-                backpressure_hits += 1
-                await asyncio.sleep(1.0)
-                continue
 
-            task = TaskMessage(
-                task_id=str(uuid.uuid4()),
-                duration=2500.0,
-                radiant_score=35.0,
-                dire_score=20.0,
-                first_blood_time=120.0,
-            )
-
-            await broker.publish(task, queue=QUEUE_NAME)
-            tasks_published += 1
-
-            if tasks_published % 10 == 0:
-                pass
-
-            await asyncio.sleep(0.1)
-
-    except KeyboardInterrupt:
-        pass
+async def main() -> None:
+    df = pd.read_csv(CSV_PATH)
+    df = df[df["duration"] > 0]
+    logger.info("scoring_started", rows=len(df))
+    published, nacks = await publish_all(df)
+    logger.info("scoring_finished", published=published, nacks=nacks)
 
 
 if __name__ == "__main__":

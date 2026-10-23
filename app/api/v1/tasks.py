@@ -1,17 +1,23 @@
+import os
 import uuid
 
-import httpx
+from aio_pika.exceptions import DeliveryError
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.broker import broker
+from app.db.results import get_result
 
-router = APIRouter()
+QUEUE_NAME = os.getenv("QUEUE_NAME", "dota_inference_queue")
+MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "20"))
+INFERENCE_DELAY_SEC = float(os.getenv("INFERENCE_DELAY_SEC", "0.5"))
+CONCURRENCY_PER_WORKER = int(os.getenv("CONCURRENCY_LIMIT", "2"))
+WORKER_REPLICAS = int(os.getenv("WORKER_REPLICAS", "1"))
 
-RABBITMQ_URL = "amqp://rabbit:rabbit@localhost:5672/"
-RABBITMQ_MANAGEMENT_URL = "http://rabbitmq:15672"
-QUEUE_NAME = "dota_inference_queue"
-MAX_QUEUE_SIZE = 20
+THROUGHPUT = CONCURRENCY_PER_WORKER * WORKER_REPLICAS / INFERENCE_DELAY_SEC
+RETRY_AFTER_SEC = max(1, round(MAX_QUEUE_SIZE / THROUGHPUT))
+
+router = APIRouter(tags=["tasks"])
 
 
 class TaskRequest(BaseModel):
@@ -21,38 +27,30 @@ class TaskRequest(BaseModel):
     first_blood_time: float
 
 
-async def get_queue_depth() -> int:
-    """Проверяет глубину очереди через RabbitMQ Management API"""
-    url = f"{RABBITMQ_MANAGEMENT_URL}/api/queues/%2f/{QUEUE_NAME}"
-    auth = httpx.BasicAuth("rabbit", "rabbit")
-    async with (
-        httpx.AsyncClient() as client,
-    ):
-        try:
-            response = await client.get(url, auth=auth)
-            if response.status_code == 200:
-                return response.json().get("messages", 0)
-        except httpx.RequestError:
-            pass
-    return 0
-
-
 @router.post("/tasks", status_code=202)
 async def create_task(request: TaskRequest):
-    queue_depth = await get_queue_depth()
-    if queue_depth >= MAX_QUEUE_SIZE:
-        raise HTTPException(
-            status_code=503,
-            detail="Service overloaded. Queue is full. Please retry later.",
-            headers={"Retry-After": "5"},
-        )
     task_id = str(uuid.uuid4())
-    task_message = {
+    payload = {
         "task_id": task_id,
         "duration": request.duration,
         "radiant_score": request.radiant_score,
         "dire_score": request.dire_score,
         "first_blood_time": request.first_blood_time,
     }
-    await broker.publish(task_message, queue=QUEUE_NAME)
+    try:
+        await broker.publish(payload, queue=QUEUE_NAME, persistent=True)
+    except DeliveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service overloaded. Queue is full. Retry later.",
+            headers={"Retry-After": str(RETRY_AFTER_SEC)},
+        ) from exc
     return {"task_id": task_id, "status": "queued"}
+
+
+@router.get("/tasks/{task_id}")
+async def task_result(task_id: str):
+    row = await get_result(task_id)
+    if row is None:
+        raise HTTPException(404, detail="Result not ready or unknown task")
+    return row
