@@ -7,9 +7,21 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
       LOG_LEVEL: INFO
       LOG_FORMAT: json
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-20}
+      RETRY_AFTER_SECONDS: "5"
+      CONCURRENCY_LIMIT: "1"
+      WORKER_REPLICAS: "1"
+      INFERENCE_DELAY_SEC: "0.5"
     depends_on:
       db:
         condition: service_healthy
+      mlflow:
+        condition: service_started
     networks:
       - backend
     deploy:
@@ -27,6 +39,51 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  worker:
+    build: .
+    command: [ "python", "-m", "app.worker" ]
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
+      INFERENCE_DELAY_SEC: "0.5"
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-20}
+      PREFETCH_COUNT: "1"
+      CONCURRENCY_LIMIT: "1"
+      MAX_RETRIES: "3"
+      WORKER_HEALTH_PORT: "8081"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    networks:
+      - backend
+
+  producer:
+    build: .
+    profiles: [ "tools" ]
+    command: [ "python", "-m", "app.producer" ]
+    environment:
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-20}
+      RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
+      SCORING_CSV: ml/data/matches.csv
+      PUBLISH_RETRY_DELAY_SEC: "0.5"
+      PUBLISH_MAX_BACKOFF_SEC: "5.0"
+    volumes:
+      - ./ml/data:/app/ml/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
 
   db:
     image: postgres:16-alpine
@@ -46,8 +103,92 @@ services:
       timeout: 3s
       retries: 5
 
+  mlflow-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    volumes:
+      - mlflow_pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: pgsty/silo:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.1
+    depends_on:
+      mlflow-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    command:
+      - sh
+      - -c
+      - |
+        pip install --no-cache-dir "psycopg[binary]" boto3 &&
+        mlflow server \
+          --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow \
+          --default-artifact-root s3://mlflow/ \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --allowed-hosts "*"
+    networks:
+      - backend
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbit
+      RABBITMQ_DEFAULT_PASS: rabbit
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
 volumes:
   pgdata:
+  mlflow_pgdata:
+  minio_data:
+  rabbitmq_data:
 
 networks:
   backend:
