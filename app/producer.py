@@ -1,5 +1,9 @@
 import asyncio
+import csv
 import os
+import types
+from collections.abc import Iterable
+from typing import Any
 
 import pandas as pd
 import structlog
@@ -16,21 +20,63 @@ RETRY_DELAY_SEC = float(os.getenv("PUBLISH_RETRY_DELAY_SEC", "0.5"))
 MAX_BACKOFF_SEC = float(os.getenv("PUBLISH_MAX_BACKOFF_SEC", "5.0"))
 
 
-async def publish_all(df: pd.DataFrame) -> tuple[int, int]:
+def _row_value(row: Any, name: str) -> Any:
+    if isinstance(row, dict):
+        return row[name]
+    return getattr(row, name)
+
+
+def iter_csv_records(path: str) -> Iterable[types.SimpleNamespace]:
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            try:
+                duration = float(row["duration"])
+                match_id = row["match_id"]
+                radiant_score = float(row["radiant_score"])
+                dire_score = float(row["dire_score"])
+                first_blood_time = float(row["first_blood_time"])
+            except (KeyError, ValueError):
+                continue
+
+            if duration <= 0:
+                continue
+
+            yield types.SimpleNamespace(
+                match_id=match_id,
+                duration=duration,
+                radiant_score=radiant_score,
+                dire_score=dire_score,
+                first_blood_time=first_blood_time,
+            )
+
+
+async def publish_all(records: Iterable[Any] | pd.DataFrame) -> tuple[int, int]:
     broker = RabbitBroker(RABBITMQ_URL)
     await broker.connect()
+
     published = 0
     nacks = 0
+
     try:
-        for row in df.itertuples(index=False):
+        iterator = records.itertuples(index=False) if hasattr(records, "itertuples") else records
+
+        for row in iterator:
+            duration = float(_row_value(row, "duration"))
+            if duration <= 0:
+                continue
+
             task = {
-                "task_id": f"score-{row.match_id}",
-                "duration": float(row.duration),
-                "radiant_score": float(row.radiant_score),
-                "dire_score": float(row.dire_score),
-                "first_blood_time": float(row.first_blood_time),
+                "task_id": f"score-{_row_value(row, 'match_id')}",
+                "duration": duration,
+                "radiant_score": float(_row_value(row, "radiant_score")),
+                "dire_score": float(_row_value(row, "dire_score")),
+                "first_blood_time": float(_row_value(row, "first_blood_time")),
             }
+
             delay = RETRY_DELAY_SEC
+
             while True:
                 try:
                     await broker.publish(task, queue=MAIN_QUEUE)
@@ -45,18 +91,19 @@ async def publish_all(df: pd.DataFrame) -> tuple[int, int]:
                     )
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, MAX_BACKOFF_SEC)
+
             if published % 20 == 0:
                 logger.info("progress", published=published, nacks=nacks)
+
     finally:
         await broker.stop()
+
     return published, nacks
 
 
 async def main() -> None:
-    df = pd.read_csv(CSV_PATH)
-    df = df[df["duration"] > 0]
-    logger.info("scoring_started", rows=len(df))
-    published, nacks = await publish_all(df)
+    logger.info("scoring_started", csv_path=CSV_PATH)
+    published, nacks = await publish_all(iter_csv_records(CSV_PATH))
     logger.info("scoring_finished", published=published, nacks=nacks)
 
 

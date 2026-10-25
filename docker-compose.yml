@@ -12,6 +12,11 @@ services:
       AWS_ACCESS_KEY_ID: minio
       AWS_SECRET_ACCESS_KEY: minio123
       RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-20}
+      RETRY_AFTER_SECONDS: "5"
+      CONCURRENCY_LIMIT: "1"
+      WORKER_REPLICAS: "1"
+      INFERENCE_DELAY_SEC: "0.5"
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +52,11 @@ services:
       AWS_SECRET_ACCESS_KEY: minio123
       RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
       INFERENCE_DELAY_SEC: "0.5"
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-20}
+      PREFETCH_COUNT: "1"
+      CONCURRENCY_LIMIT: "1"
+      MAX_RETRIES: "3"
+      WORKER_HEALTH_PORT: "8081"
     depends_on:
       db:
         condition: service_healthy
@@ -62,8 +72,11 @@ services:
     profiles: [ "tools" ]
     command: [ "python", "-m", "app.producer" ]
     environment:
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-20}
       RABBITMQ_URL: amqp://rabbit:rabbit@rabbitmq:5672/
       SCORING_CSV: ml/data/matches.csv
+      PUBLISH_RETRY_DELAY_SEC: "0.5"
+      PUBLISH_MAX_BACKOFF_SEC: "5.0"
     volumes:
       - ./ml/data:/app/ml/data
     depends_on:

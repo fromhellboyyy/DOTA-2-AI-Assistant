@@ -1,0 +1,31 @@
+Traceback (most recent call last):
+  File "C:\Users\hellboy\PycharmProjects\DOTA-2-AI-Assistant\scripts\measure.py", line 196, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\hellboy\PycharmProjects\DOTA-2-AI-Assistant\scripts\measure.py", line 171, in main
+    rows = asyncio.run(sample(args.fast, args.slow, args.tail, args.cap))
+  File "C:\Python314\Lib\asyncio\runners.py", line 203, in run
+    with Runner(debug=debug, loop_factory=loop_factory) as runner:
+         ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 63, in __exit__
+    self.close()
+    ~~~~~~~~~~^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 73, in close
+    loop.run_until_complete(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        loop.shutdown_default_executor(constants.THREAD_JOIN_TIMEOUT))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 706, in run_until_complete
+    self.run_forever()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 677, in run_forever
+    self._run_once()
+    ~~~~~~~~~~~~~~^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 2008, in _run_once
+    event_list = self._selector.select(timeout)
+  File "C:\Python314\Lib\asyncio\windows_events.py", line 446, in select
+    self._poll(timeout)
+    ~~~~~~~~~~^^^^^^^^^
+  File "C:\Python314\Lib\asyncio\windows_events.py", line 775, in _poll
+    status = _overlapped.GetQueuedCompletionStatus(self._iocp, ms)
+KeyboardInterrupt

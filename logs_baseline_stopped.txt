@@ -1,0 +1,6 @@
+2026-10-25 01:01:39 [info     ] scoring_started                csv_path=ml/data/matches.csv
+2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=20
+2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=40
+2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=60
+2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=80
+2026-10-25 01:01:39 [info     ] scoring_finished               nacks=0 published=88

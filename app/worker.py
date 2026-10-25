@@ -5,6 +5,7 @@ import signal
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import aio_pika
 import mlflow
 import mlflow.pyfunc
 import pandas as pd
@@ -27,7 +28,7 @@ logger = structlog.get_logger(__name__)
 INFERENCE_DELAY_SEC = float(os.getenv("INFERENCE_DELAY_SEC", "0.5"))
 MLFLOW_MODEL_URI = os.getenv("MLFLOW_MODEL_URI", "models:/Dota2WinPredictor@champion")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-CONCURRENCY_LIMIT = int(os.getenv("CONCURRENCY_LIMIT", "2"))
+CONCURRENCY_LIMIT = int(os.getenv("CONCURRENCY_LIMIT", "1"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 HEALTH_PORT = int(os.getenv("WORKER_HEALTH_PORT", "8081"))
 
@@ -36,6 +37,46 @@ semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 stop_event = asyncio.Event()
 in_flight = 0
 model = None
+
+_QOS_PATCHED = False
+
+
+def _patch_aio_pika_qos() -> None:
+    global _QOS_PATCHED
+
+    if _QOS_PATCHED:
+        return
+
+    original_channel = aio_pika.Connection.channel
+
+    async def patched_channel(self, *args, **kwargs):
+        channel = await original_channel(self, *args, **kwargs)
+
+        try:
+            await channel.set_qos(prefetch_count=PREFETCH_COUNT)
+            logger.debug(
+                "aio_pika_channel_qos_applied",
+                prefetch_count=PREFETCH_COUNT,
+            )
+        except Exception as exc:
+            logger.warning(
+                "aio_pika_channel_qos_failed",
+                error=str(exc),
+            )
+
+        return channel
+
+    aio_pika.Connection.channel = patched_channel
+
+    with contextlib.suppress(ImportError, AttributeError):
+        import aio_pika.robust_connection as robust_module
+
+        robust_module.RobustConnection.channel = patched_channel
+
+    _QOS_PATCHED = True
+
+
+_patch_aio_pika_qos()
 
 
 class TaskMessage(BaseModel):
@@ -49,6 +90,7 @@ class TaskMessage(BaseModel):
 
 async def load_model() -> None:
     global model
+
     logger.info("loading_model_from_registry", uri=MLFLOW_MODEL_URI)
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     model = mlflow.pyfunc.load_model(MLFLOW_MODEL_URI)
@@ -63,10 +105,13 @@ def _predict_sync(features: pd.DataFrame) -> int:
 @broker.subscriber(queue=MAIN_QUEUE)
 async def process_task(msg: TaskMessage) -> None:
     global in_flight
+
     async with semaphore:
         in_flight += 1
+
         try:
             logger.info("task_received", task_id=msg.task_id, attempt=msg.attempt)
+
             features = pd.DataFrame(
                 [
                     {
@@ -77,15 +122,18 @@ async def process_task(msg: TaskMessage) -> None:
                     }
                 ]
             )
+
             loop = asyncio.get_running_loop()
             prediction = await loop.run_in_executor(executor, _predict_sync, features)
             inserted = await save_result(msg.task_id, prediction)
+
             logger.info(
                 "task_completed",
                 task_id=msg.task_id,
                 prediction=prediction,
                 inserted=inserted,
             )
+
         except Exception as exc:
             logger.warning(
                 "task_failed",
@@ -93,8 +141,10 @@ async def process_task(msg: TaskMessage) -> None:
                 attempt=msg.attempt,
                 error=str(exc),
             )
+
             if msg.attempt + 1 < MAX_RETRIES:
                 retry_msg = msg.model_copy(update={"attempt": msg.attempt + 1})
+
                 try:
                     await broker.publish(retry_msg.model_dump(), queue=MAIN_QUEUE)
                 except DeliveryError:
@@ -106,6 +156,7 @@ async def process_task(msg: TaskMessage) -> None:
                     logger.error("task_dead_lettered", task_id=msg.task_id)
                 except DeliveryError:
                     logger.critical("task_lost_dlq_reject", task_id=msg.task_id)
+
         finally:
             in_flight -= 1
 
@@ -122,10 +173,13 @@ async def _health_handler(request: web.Request) -> web.Response:
 async def _start_health_server() -> web.AppRunner:
     app = web.Application()
     app.router.add_get("/health", _health_handler)
+
     runner = web.AppRunner(app)
     await runner.setup()
+
     site = web.TCPSite(runner, "0.0.0.0", HEALTH_PORT)
     await site.start()
+
     logger.info("health_server_started", port=HEALTH_PORT)
     return runner
 
@@ -137,13 +191,17 @@ def _request_stop() -> None:
 
 async def main() -> None:
     loop = asyncio.get_running_loop()
+
     for sig in (signal.SIGTERM, signal.SIGINT):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _request_stop)
+
     await ensure_schema()
     await load_model()
+
     runner = await _start_health_server()
     await broker.start()
+
     logger.info(
         "worker_listening",
         queue=QUEUE_NAME,
@@ -151,11 +209,23 @@ async def main() -> None:
         prefetch=PREFETCH_COUNT,
         workers=CONCURRENCY_LIMIT,
     )
+
     await stop_event.wait()
+
     logger.info("draining_in_flight", in_flight=in_flight)
+
     await broker.stop()
+
+    deadline = time.monotonic() + 30.0
+    while in_flight > 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+
+    if in_flight > 0:
+        logger.warning("shutdown_timeout_waiting_in_flight", in_flight=in_flight)
+
     await runner.cleanup()
     executor.shutdown(wait=True)
+
     logger.info("worker_stopped_gracefully")
 
 

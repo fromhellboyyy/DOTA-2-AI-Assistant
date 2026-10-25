@@ -44,7 +44,8 @@ testpaths = ["tests"]
 addopts = "-v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=80"
 markers = ["integration: requires Docker (Testcontainers)"]
 filterwarnings = [
-    "ignore:The wait_for_logs function:DeprecationWarning",
+    'ignore:The wait_for_logs function:DeprecationWarning',
+    'ignore:Using `httpx` with `starlette\\.testclient` is deprecated:Warning',
 ]
 
 [build-system]
@@ -63,6 +64,17 @@ ignore = ["S101", "S104"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = [
+    "T201",
+    "S607",
+    "S603",
+    "RUF001",
+    "S110",
+    "SIM105",
+    "E501",
+]
 
 [tool.ruff.format]
 quote-style = "double"
