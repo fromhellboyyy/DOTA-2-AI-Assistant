@@ -1,0 +1,77 @@
+data_dir: /var/lib/vector
+
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+sources:
+  docker:
+    type: docker_logs
+    include_labels:
+      - "com.docker.compose.project=${COMPOSE_PROJECT_NAME:-dota-2-ai-assistant}"
+
+transforms:
+  normalize:
+    type: remap
+    inputs: [docker]
+    source: |
+      raw = string!(.message)
+
+      svc, svc_err = string(.label."com.docker.compose.service")
+      if svc_err != null {
+        svc = "unknown"
+      }
+
+      lvl = "info"
+      parsed, parse_err = parse_json(raw)
+
+      if parse_err == null && is_object(parsed) {
+        obj = object!(parsed)
+        app_svc, e1 = string(obj.service)
+        if e1 == null {
+          svc = app_svc
+        }
+        app_lvl, e2 = string(obj.level)
+        if e2 == null {
+          lvl = downcase(app_lvl)
+        }
+      } else {
+        lvl_match, lvl_err = parse_regex(raw, r'(?i)(?:\blevel=|\t|\[)(?P<lvl>debug|info|warn|warning|error|err|fatal|panic|critical)(?:\]|\t|\s|$)')
+        if lvl_err == null {
+          lvl = downcase(string!(lvl_match.lvl))
+        } else if match(raw, r'\b(?:ERROR|FATAL|PANIC):') {
+          lvl = "error"
+        }
+      }
+
+      if lvl == "warn" {
+        lvl = "warning"
+      }
+      if lvl == "err" {
+        lvl = "error"
+      }
+      if lvl == "fatal" || lvl == "panic" {
+        lvl = "critical"
+      }
+
+      .service = svc
+      .level = lvl
+
+  drop_self:
+    type: filter
+    inputs: [normalize]
+    condition: '.service != "vector"'
+
+sinks:
+  loki:
+    type: loki
+    inputs: [drop_self]
+    endpoint: http://loki:3100
+    encoding:
+      codec: text
+    labels:
+      service: "{{ service }}"
+      level: "{{ level }}"
+      env: "${DEPLOYMENT_ENVIRONMENT:-dev}"
+    remove_label_fields: true
+    out_of_order_action: accept

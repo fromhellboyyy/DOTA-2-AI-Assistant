@@ -8,16 +8,39 @@ PUB_RE = re.compile(r"published=(\d+)")
 NACK_RE = re.compile(r"nacks=(\d+)")
 
 
+def _from_json_line(line: str) -> tuple[int | None, int | None]:
+    start = line.find("{")
+    if start < 0:
+        return None, None
+    try:
+        record = json.loads(line[start:])
+    except ValueError:
+        return None, None
+    if not isinstance(record, dict):
+        return None, None
+    published = record.get("published")
+    nacks = record.get("nacks")
+    return (
+        int(published) if isinstance(published, int) else None,
+        int(nacks) if isinstance(nacks, int) else None,
+    )
+
+
 def counters(log_path: Path) -> tuple[int, int]:
     published = 0
     nacks = 0
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        pm = PUB_RE.search(line)
-        nm = NACK_RE.search(line)
-        if pm:
-            published = int(pm.group(1))
-        if nm:
-            nacks = int(nm.group(1))
+        pub, nack = _from_json_line(line)
+        if pub is None:
+            pm = PUB_RE.search(line)
+            pub = int(pm.group(1)) if pm else None
+        if nack is None:
+            nm = NACK_RE.search(line)
+            nack = int(nm.group(1)) if nm else None
+        if pub is not None:
+            published = pub
+        if nack is not None:
+            nacks = nack
     return published, nacks
 
 

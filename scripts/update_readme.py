@@ -11,6 +11,24 @@ HEADER = (
     "\n"
 )
 
+OBSERVABILITY = (
+    "## Observability\n"
+    "\n"
+    "Logs (Vector, Loki), traces (OpenTelemetry Collector, Tempo), metrics "
+    "(VictoriaMetrics) and Grafana dashboards and alerts are described in "
+    "[OBSERVABILITY.md](OBSERVABILITY.md): stack choice, justification, label "
+    "cardinality, sampling, series estimate and memory budget.\n"
+    "\n"
+    "```\n"
+    "docker compose up -d                          # application only\n"
+    "docker compose --profile logs up -d           # + Vector and Loki\n"
+    "docker compose --profile traces up -d         # + Collector and Tempo\n"
+    "docker compose --profile metrics up -d        # + Collector and VictoriaMetrics\n"
+    "docker compose --profile observability up -d  # everything, Grafana on http://localhost:3000 (admin/admin)\n"
+    "```\n"
+    "\n"
+)
+
 
 def main() -> int:
     if not SECTION.exists():
@@ -22,7 +40,7 @@ def main() -> int:
         print("empty", SECTION.as_posix())
         return 1
 
-    README.write_text(HEADER + section_text + "\n", encoding="utf-8")
+    README.write_text(HEADER + OBSERVABILITY + section_text + "\n", encoding="utf-8")
 
     print("readme", README.as_posix())
     print("action rewritten")

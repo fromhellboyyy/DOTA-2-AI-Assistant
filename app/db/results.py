@@ -1,6 +1,9 @@
+from opentelemetry import trace
 from sqlalchemy import text
 
 from app.db.session import engine
+
+tracer = trace.get_tracer("app.db")
 
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS task_results (
@@ -29,12 +32,23 @@ async def ensure_schema() -> None:
 
 
 async def save_result(task_id: str, prediction: int) -> bool:
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(INSERT_RESULT),
-            {"task_id": task_id, "prediction": prediction},
-        )
-        return result.rowcount > 0
+    with tracer.start_as_current_span(
+        "db.save_result",
+        attributes={
+            "db.system": "postgresql",
+            "db.operation": "INSERT",
+            "db.sql.table": "task_results",
+            "task.id": task_id,
+        },
+    ) as span:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(INSERT_RESULT),
+                {"task_id": task_id, "prediction": prediction},
+            )
+            inserted = result.rowcount > 0
+        span.set_attribute("db.inserted", inserted)
+        return inserted
 
 
 async def get_result(task_id: str) -> dict | None:

@@ -1,7 +1,10 @@
+import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.ml.model import is_model_loaded, predict
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["ml"])
 
@@ -21,6 +24,7 @@ class PredictionResponse(BaseModel):
 @router.post("/process", response_model=PredictionResponse)
 async def process(features: MatchFeatures) -> PredictionResponse:
     if not is_model_loaded():
+        logger.error("model_not_loaded_503")
         raise HTTPException(status_code=503, detail="Model is not loaded")
 
     prediction = predict(features.model_dump())

@@ -1,0 +1,95 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: pipeline
+    folder: Pipeline
+    interval: 10s
+    rules:
+      - uid: queue-over-90
+        title: Queue is over 90% full
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: "dota_inference_queue is filled above 90% of x-max-length for more than 1 minute"
+          description: "ready messages / x-max-length > 0.9. Source is throttled by reject-publish, workers do not keep up."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: vm
+            model:
+              refId: A
+              expr: 'max(rabbitmq_detailed_queue_messages_ready{queue="dota_inference_queue"}) / 20'
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings:
+                mode: dropNN
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.9]
+
+      - uid: dlq-not-empty
+        title: Messages reached DLQ
+        condition: C
+        for: 30s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: "A task was dead-lettered in the last 5 minutes"
+          description: "increase(worker_dead_letters_total[5m]) > 0. Look for trace_id in the logs of the dead_letter_received event."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: vm
+            model:
+              refId: A
+              expr: 'sum(increase(worker_dead_letters_total[5m]))'
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings:
+                mode: dropNN
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]

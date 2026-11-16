@@ -253,8 +253,8 @@ function Last-Published($logPath) {
         return 0
     }
 
-    $m = Get-Content $logPath | Select-String "published=(\d+)" | Select-Object -Last 1
-    if ($m -match "published=(\d+)") {
+    $m = Get-Content $logPath | Select-String '"published":\s*(\d+)' | Select-Object -Last 1
+    if ($m -match '"published":\s*(\d+)') {
         return [int]$Matches[1]
     }
 

@@ -1,6 +1,6 @@
-2026-10-25 01:01:39 [info     ] scoring_started                csv_path=ml/data/matches.csv
-2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=20
-2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=40
-2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=60
-2026-10-25 01:01:39 [info     ] progress                       nacks=0 published=80
-2026-10-25 01:01:39 [info     ] scoring_finished               nacks=0 published=88
+{"csv_path": "ml/data/matches.csv", "event": "scoring_started", "level": "info", "logger": "__main__", "timestamp": "2026-11-16T09:45:17.322826Z", "service": "source", "env": "dev"}
+{"published": 20, "nacks": 0, "event": "progress", "level": "info", "logger": "__main__", "timestamp": "2026-11-16T09:45:17.460269Z", "service": "source", "env": "dev"}
+{"published": 40, "nacks": 0, "event": "progress", "level": "info", "logger": "__main__", "timestamp": "2026-11-16T09:45:17.478328Z", "service": "source", "env": "dev"}
+{"published": 60, "nacks": 0, "event": "progress", "level": "info", "logger": "__main__", "timestamp": "2026-11-16T09:45:17.494577Z", "service": "source", "env": "dev"}
+{"published": 80, "nacks": 0, "event": "progress", "level": "info", "logger": "__main__", "timestamp": "2026-11-16T09:45:17.510575Z", "service": "source", "env": "dev"}
+{"published": 88, "nacks": 0, "event": "scoring_finished", "level": "info", "logger": "__main__", "timestamp": "2026-11-16T09:45:17.521044Z", "service": "source", "env": "dev"}

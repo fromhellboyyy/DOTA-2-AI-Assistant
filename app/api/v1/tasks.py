@@ -1,13 +1,18 @@
 import os
 import uuid
 
+import structlog
 from aio_pika.exceptions import DeliveryError
 from fastapi import APIRouter, HTTPException
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel
 
 from app.broker import broker
 from app.db.results import get_result
 from app.queues import MAIN_QUEUE, MAX_QUEUE_SIZE
+
+logger = structlog.get_logger(__name__)
 
 INFERENCE_DELAY_SEC = float(os.getenv("INFERENCE_DELAY_SEC", "0.5"))
 CONCURRENCY_PER_WORKER = int(os.getenv("CONCURRENCY_LIMIT", "1"))
@@ -43,14 +48,28 @@ async def create_task(request: TaskRequest):
         "first_blood_time": request.first_blood_time,
     }
 
-    try:
-        await broker.publish(payload, queue=MAIN_QUEUE)
-    except DeliveryError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Service overloaded. Queue is full. Retry later.",
-            headers={"Retry-After": str(RETRY_AFTER_SEC)},
-        ) from exc
+    with structlog.contextvars.bound_contextvars(task_id=task_id):
+        span = trace.get_current_span()
+        span.set_attribute("task.id", task_id)
+
+        try:
+            await broker.publish(payload, queue=MAIN_QUEUE, correlation_id=task_id)
+        except DeliveryError as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "queue is full"))
+            logger.warning(
+                "queue_full_503",
+                queue=MAIN_QUEUE.name,
+                max_queue_size=MAX_QUEUE_SIZE,
+                retry_after_sec=RETRY_AFTER_SEC,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Service overloaded. Queue is full. Retry later.",
+                headers={"Retry-After": str(RETRY_AFTER_SEC)},
+            ) from exc
+
+        logger.info("task_accepted", queue=MAIN_QUEUE.name)
 
     return {"task_id": task_id, "status": "queued"}
 

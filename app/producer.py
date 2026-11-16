@@ -9,11 +9,17 @@ import pandas as pd
 import structlog
 from aio_pika.exceptions import DeliveryError
 from faststream.rabbit import RabbitBroker
+from opentelemetry import trace
+from opentelemetry.context import Context
 
 from app.broker import RABBITMQ_URL
+from app.logger import setup_logging
+from app.metrics import SOURCE_NACKS, SOURCE_PUBLISHED, SOURCE_WAIT
 from app.queues import MAIN_QUEUE
+from app.telemetry import setup_telemetry, shutdown_telemetry, telemetry_middlewares
 
 logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer("app.source")
 
 CSV_PATH = os.getenv("SCORING_CSV", "ml/data/matches.csv")
 RETRY_DELAY_SEC = float(os.getenv("PUBLISH_RETRY_DELAY_SEC", "0.5"))
@@ -52,8 +58,36 @@ def iter_csv_records(path: str) -> Iterable[types.SimpleNamespace]:
             )
 
 
+async def _publish_with_backoff(broker: RabbitBroker, task: dict[str, Any]) -> tuple[int, int]:
+    attempt = 0
+    nacks = 0
+    delay = RETRY_DELAY_SEC
+    span = trace.get_current_span()
+
+    while True:
+        attempt += 1
+        try:
+            await broker.publish(task, queue=MAIN_QUEUE, correlation_id=task["task_id"])
+        except DeliveryError:
+            nacks += 1
+            SOURCE_NACKS.add(1)
+            span.add_event("broker_nack", {"attempt": attempt, "retry_in_sec": delay})
+            logger.warning("backpressure_nack", attempt=attempt, retry_in_sec=delay)
+            with tracer.start_as_current_span(
+                "source.backoff",
+                attributes={"backoff.seconds": delay, "publish.attempt": attempt},
+            ):
+                await asyncio.sleep(delay)
+            SOURCE_WAIT.add(delay)
+            delay = min(delay * 2, MAX_BACKOFF_SEC)
+        else:
+            SOURCE_PUBLISHED.add(1)
+            span.set_attribute("publish.attempts", attempt)
+            return 1, nacks
+
+
 async def publish_all(records: Iterable[Any] | pd.DataFrame) -> tuple[int, int]:
-    broker = RabbitBroker(RABBITMQ_URL)
+    broker = RabbitBroker(RABBITMQ_URL, middlewares=telemetry_middlewares(), logger=None)
     await broker.connect()
 
     published = 0
@@ -75,22 +109,18 @@ async def publish_all(records: Iterable[Any] | pd.DataFrame) -> tuple[int, int]:
                 "first_blood_time": float(_row_value(row, "first_blood_time")),
             }
 
-            delay = RETRY_DELAY_SEC
+            with (
+                structlog.contextvars.bound_contextvars(task_id=task["task_id"]),
+                tracer.start_as_current_span(
+                    "source.publish_task",
+                    context=Context(),
+                    attributes={"task.id": task["task_id"]},
+                ),
+            ):
+                sent, rejected = await _publish_with_backoff(broker, task)
 
-            while True:
-                try:
-                    await broker.publish(task, queue=MAIN_QUEUE)
-                    published += 1
-                    break
-                except DeliveryError:
-                    nacks += 1
-                    logger.warning(
-                        "backpressure_nack",
-                        task_id=task["task_id"],
-                        retry_in_sec=delay,
-                    )
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, MAX_BACKOFF_SEC)
+            published += sent
+            nacks += rejected
 
             if published % 20 == 0:
                 logger.info("progress", published=published, nacks=nacks)
@@ -102,9 +132,12 @@ async def publish_all(records: Iterable[Any] | pd.DataFrame) -> tuple[int, int]:
 
 
 async def main() -> None:
+    setup_logging()
+    setup_telemetry()
     logger.info("scoring_started", csv_path=CSV_PATH)
     published, nacks = await publish_all(iter_csv_records(CSV_PATH))
     logger.info("scoring_finished", published=published, nacks=nacks)
+    shutdown_telemetry()
 
 
 if __name__ == "__main__":

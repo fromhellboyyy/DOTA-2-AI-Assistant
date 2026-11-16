@@ -1,0 +1,61 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: rabbitmq
+          scrape_interval: 5s
+          metrics_path: /metrics/detailed
+          params:
+            family: [queue_coarse_metrics, queue_consumer_count]
+          static_configs:
+            - targets: ["rabbitmq:15692"]
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 150
+    spike_limit_mib: 40
+  batch:
+    send_batch_size: 512
+    timeout: 2s
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    retry_on_failure:
+      max_elapsed_time: 30s
+    sending_queue:
+      queue_size: 200
+  prometheusremotewrite:
+    endpoint: http://victoria-metrics:8428/api/v1/write
+    retry_on_failure:
+      max_elapsed_time: 30s
+    resource_to_telemetry_conversion:
+      enabled: false
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]

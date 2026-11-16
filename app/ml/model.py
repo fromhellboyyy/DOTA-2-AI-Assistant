@@ -8,6 +8,8 @@ import mlflow.pyfunc
 import pandas as pd
 import structlog
 
+from app.ml.registry import resolve_model_version
+
 logger = structlog.get_logger(__name__)
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -27,7 +29,14 @@ def load_model() -> None:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             _model = mlflow.pyfunc.load_model(MODEL_URI)
-            logger.info("model_loaded_successfully", model_uri=MODEL_URI, attempt=attempt)
+            alias, version = resolve_model_version(MODEL_URI, MLFLOW_TRACKING_URI)
+            logger.info(
+                "model_loaded_successfully",
+                model_uri=MODEL_URI,
+                alias=alias,
+                version=version,
+                attempt=attempt,
+            )
             return
         except Exception as exc:
             logger.warning(
