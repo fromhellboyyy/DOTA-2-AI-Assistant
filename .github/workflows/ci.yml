@@ -33,8 +33,13 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      - name: Pytest + Coverage
-        run: uv run pytest --cov=app --cov-report=xml --cov-fail-under=80
+      - name: Pytest + Coverage (unit)
+        run: uv run pytest -m "not integration" --cov=app --cov-report=xml --cov-fail-under=80
+
+      - name: Integration test
+        run: uv run pytest tests/test_integration.py -m integration --no-cov
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
 
       - name: Upload coverage
         if: always()

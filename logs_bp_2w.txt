@@ -1,0 +1,6 @@
+2026-10-23 23:54:13 [info     ] scoring_started                rows=88
+2026-10-23 23:54:14 [info     ] progress                       nacks=0 published=20
+2026-10-23 23:54:14 [info     ] progress                       nacks=0 published=40
+2026-10-23 23:54:14 [info     ] progress                       nacks=0 published=60
+2026-10-23 23:54:14 [info     ] progress                       nacks=0 published=80
+2026-10-23 23:54:14 [info     ] scoring_finished               nacks=0 published=88

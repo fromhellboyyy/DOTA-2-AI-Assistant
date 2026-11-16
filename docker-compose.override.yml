@@ -1,0 +1,21 @@
+services:
+  worker:
+    environment:
+      PREFETCH_COUNT: "1"
+      CONCURRENCY_LIMIT: "1"
+      INFERENCE_DELAY_SEC: "0.5"
+      MAX_RETRIES: "3"
+      WORKER_HEALTH_PORT: "8081"
+
+  producer:
+    environment:
+      MAX_QUEUE_SIZE: "20"
+      PUBLISH_RETRY_DELAY_SEC: "0.05"
+      PUBLISH_MAX_BACKOFF_SEC: "0.25"
+
+  app:
+    environment:
+      RETRY_AFTER_SECONDS: "5"
+      CONCURRENCY_LIMIT: "1"
+      WORKER_REPLICAS: "1"
+      INFERENCE_DELAY_SEC: "0.5"
