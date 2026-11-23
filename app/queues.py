@@ -2,8 +2,10 @@ import os
 
 from faststream.rabbit import ExchangeType, RabbitExchange, RabbitQueue
 
+from app.capacity import queue_limit
+
 QUEUE_NAME = os.getenv("QUEUE_NAME", "dota_inference_queue")
-MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "20"))
+MAX_QUEUE_SIZE = queue_limit()
 DLX_NAME = "dota_dlx"
 DLQ_NAME = "dota_inference_dlq"
 

@@ -4,6 +4,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app import capacity
+
 TAGS = ["baseline_stopped", "bp_stopped", "bp_live_1w", "bp_live_2w"]
 
 LABELS = {
@@ -20,27 +24,36 @@ PHASE = {
     "bp_live_2w": "масштабирование",
 }
 
+LIM1 = capacity.computed_queue_limit(1)
+LIM2 = capacity.computed_queue_limit(2)
+DELAY = f"{capacity.inference_delay_sec():g}"
+BATCH = capacity.batch_size()
+WAIT = f"{capacity.target_wait_sec():g}"
+RATE1 = capacity.worker_rate()
+RATE1_TXT = f"{RATE1:g}"
+RATE2_TXT = f"{RATE1 * 2:g}"
+
 LIMIT = {
     "baseline_stopped": "100000",
-    "bp_stopped": "20",
-    "bp_live_1w": "20",
-    "bp_live_2w": "20",
+    "bp_stopped": str(LIM1),
+    "bp_live_1w": str(LIM1),
+    "bp_live_2w": str(LIM2),
 }
 
 ROWS_TOTAL = 88
 NACK_RE = re.compile(r"backpressure_nack")
 
 METHODOLOGY = (
-    "Исследование проводится в двух фазах, потому что противодавление и масштабирование наблюдаются в разных состояниях системы. "
-    "В фазе механизма воркеры остановлены, очередь пересоздана пустой и ограничена политикой `max-length=20` с `overflow=reject-publish`; источник публикует пакет из 88 записей. "
-    "Без эффективного ограничения глубина дорастает до объёма пакета без отказов. "
-    "С ограничением брокер отбивает излишек через `reject-publish`, источник уходит в backoff, а очередь зажата на лимите. "
-    "В фазе масштабирования воркеры работают, ограничение очереди применяется политикой RabbitMQ, а замер продолжается до полной разрядки очереди. "
-    "Поэтому время полной обработки пакета измеряется как время от начала публикации до момента, когда глубина очереди становится равной нулю. "
-    "Все прогоны выполнены при фиксированном `INFERENCE_DELAY_SEC=0.5`. "
-    "Глубина снимается через `rabbitmqctl` как авторитетное состояние узла, отдельно фиксируются `messages_ready`, `messages_unacknowledged` и суммарное `messages`. "
-    "Память снимается через `docker stats`. "
-    "Скорость источника и wall-clock публикации берутся из логов producer через `scripts/extract_rate.py`, отказы считаются по строкам `backpressure_nack` в логе."
+    f"Исследование проводится в двух фазах, потому что противодавление и масштабирование наблюдаются в разных состояниях системы. "
+    f"В фазе механизма воркеры остановлены, очередь пересоздана пустой и ограничена политикой `max-length`, рассчитанной по формуле `{WAIT} с × скорость воркера × число воркеров` ({LIM1} для одного воркера и {LIM2} для двух), с `overflow=reject-publish`; источник публикует пакет из 88 записей. "
+    f"Без эффективного ограничения глубина дорастает до объёма пакета без отказов. "
+    f"С ограничением брокер отбивает излишек через `reject-publish`, источник уходит в backoff, а очередь зажата на лимите. "
+    f"В фазе масштабирования воркеры работают, ограничение очереди применяется политикой RabbitMQ, а замер продолжается до полной разрядки очереди. "
+    f"Поэтому время полной обработки пакета измеряется как время от начала публикации до момента, когда глубина очереди становится равной нулю. "
+    f"Все прогоны выполнены при фиксированных `INFERENCE_DELAY_SEC={DELAY}` (время одного вызова модели на батч), `BATCH_SIZE={BATCH}`, `CONCURRENCY_LIMIT=1`. "
+    f"Глубина снимается через `rabbitmqctl` как авторитетное состояние узла, отдельно фиксируются `messages_ready`, `messages_unacknowledged` и суммарное `messages`. "
+    f"Память снимается через `docker stats`. "
+    f"Скорость источника и wall-clock публикации берутся из логов producer через `scripts/extract_rate.py`, отказы считаются по строкам `backpressure_nack` в логе."
 )
 
 
@@ -380,19 +393,19 @@ def findings(data):
         per2 = "-"
 
     live_nacks = l1_nk + l2_nk
-    ready_limit_ok = bp_ready_peak <= 20 and l1_ready_peak <= 20 and l2_ready_peak <= 20
+    ready_limit_ok = bp_ready_peak <= LIM1 and l1_ready_peak <= LIM1 and l2_ready_peak <= LIM2
 
     mech = (
         f"В фазе механизма воркеры остановлены. Без эффективного ограничения `baseline_stopped` очередь дорастает до {bs_fin} сообщений при {bs_nk} отказах, "
         f"ready peak {bs_ready_peak}, total peak {bs_total_peak}. "
-        f"С политикой `max-length=20` и `overflow=reject-publish` очередь `bp_stopped` удержана на {bp_fin} сообщениях, источник получил {bp_nk} отказов и ушёл в backoff, "
+        f"С политикой `max-length={LIM1}` и `overflow=reject-publish` очередь `bp_stopped` удержана на {bp_fin} сообщениях, источник получил {bp_nk} отказов и ушёл в backoff, "
         f"ready peak {bp_ready_peak}, total peak {bp_total_peak}. "
         f"Главный контраст: глубина {bs_fin} против {bp_fin}, отказы {bs_nk} против {bp_nk}. "
     )
 
     if ready_limit_ok:
         mech += (
-            f"В live-режиме ready peak составил {l1_ready_peak} и {l2_ready_peak}, то есть не превысил лимит 20. "
+            f"В live-режиме ready peak составил {l1_ready_peak} и {l2_ready_peak}, то есть не превысил лимиты {LIM1} и {LIM2}. "
             f"Unacked peak составил {l1_unacked_peak} и {l2_unacked_peak}, total peak {l1_total_peak} и {l2_total_peak}. "
             f"Это означает, что политика `max-length` удерживает ready-часть очереди, а total может быть выше за счёт сообщений, уже взятых воркерами в обработку."
         )
@@ -416,8 +429,8 @@ def findings(data):
         f"В stopped-фазах скорость источника составляет {round(bs_rate, 2)} задач/с без ограничения и {round(bp_rate, 2)} задач/с с backpressure. "
         f"Это показывает, что при остановленных потребителях противодавление реально замедляет источник. "
         f"В live-режиме наблюдённая скорость: {round(l1_rate, 2)} задач/с при одном воркере и {round(l2_rate, 2)} задач/с при двух. "
-        f"Теоретическая пропускная способность обработки при последовательной модели около 2 задач/с на воркер, "
-        f"то есть 2 и 4 задач/с для одного и двух воркеров. "
+        f"Теоретическая пропускная способность обработки при батчевом инференсе около {RATE1_TXT} задач/с на воркер, "
+        f"то есть {RATE1_TXT} и {RATE2_TXT} задач/с для одного и двух воркеров. "
     )
 
     if live_nacks > 0:
@@ -434,7 +447,7 @@ def findings(data):
 
     if has_drain:
         latency = (
-            f"Время одной вычислительной операции задано конфигурацией `INFERENCE_DELAY_SEC=0.5`. "
+            f"Время одной вычислительной операции задано конфигурацией `INFERENCE_DELAY_SEC={DELAY}` на один батч из {BATCH} записей. "
             f"Время полной обработки пакета из 88 задач до разрядки очереди составило {l1_drain_r} с при одном воркере "
             f"и {l2_drain_r} с при двух воркерах. "
             f"Средний интервал завершения задач равен {per1} с и {per2} с соответственно. "
@@ -445,8 +458,8 @@ def findings(data):
     else:
         latency = (
             f"Данные о полной разрядке очереди отсутствуют. Wall-clock {round(l1_wall, 1)} с и {round(l2_wall, 1)} с относится к публикации пакета источником, "
-            f"а не к времени выполнения задачи воркером. При `INFERENCE_DELAY_SEC=0.5` теоретическое время обработки 88 задач: "
-            f"44 с одним воркером и 22 с двумя воркерами."
+            f"а не к времени выполнения задачи воркером. При `INFERENCE_DELAY_SEC={DELAY}` и `BATCH_SIZE={BATCH}` теоретическое время обработки 88 задач: "
+            f"{ROWS_TOTAL / RATE1:.1f} с одним воркером и {ROWS_TOTAL / (2 * RATE1):.1f} с двумя воркерами."
         )
 
     if has_drain:
@@ -466,14 +479,14 @@ def findings(data):
 
     if ready_limit_ok:
         depth_bullet = (
-            f"- глубина ready-очереди не превышает установленного лимита: в stopped-фазе `bp_stopped` ready peak {bp_ready_peak} при лимите 20 "
+            f"- глубина ready-очереди не превышает установленного лимита: в stopped-фазе `bp_stopped` ready peak {bp_ready_peak} при лимите {LIM1} "
             f"и {bp_nk} отказах, `baseline_stopped` без эффективного ограничения достиг {bs_fin}; "
             f"в live-фазе ready peak составил {l1_ready_peak} и {l2_ready_peak}, total peak {l1_total_peak} и {l2_total_peak} "
             f"за счёт unacknowledged сообщений."
         )
     else:
         depth_bullet = (
-            f"- глубина очереди не превышает установленного лимита в stopped-фазе: `bp_stopped` удержан на {bp_fin} при лимите 20 "
+            f"- глубина очереди не превышает установленного лимита в stopped-фазе: `bp_stopped` удержан на {bp_fin} при лимите {LIM1} "
             f"и {bp_nk} отказах, `baseline_stopped` без эффективного ограничения достиг {bs_fin}; "
             f"в live-фазе ready peak составил {l1_ready_peak} и {l2_ready_peak}, total peak {l1_total_peak} и {l2_total_peak}; "
             f"поскольку total включает unacknowledged, потолок ready-очереди доказан stopped-фазой, а live-фаза показывает время полной обработки."
