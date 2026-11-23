@@ -3,6 +3,7 @@ import contextlib
 import os
 import signal
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import aio_pika
@@ -15,6 +16,8 @@ from aiohttp import web
 from faststream.rabbit import RabbitMessage
 from pydantic import BaseModel, Field
 
+from app import capacity
+from app.batching import MicroBatcher
 from app.broker import PREFETCH_COUNT, broker
 from app.db.results import ensure_schema, save_result
 from app.queues import DLQ, DLX, MAIN_QUEUE, MAX_QUEUE_SIZE, QUEUE_NAME
@@ -25,15 +28,17 @@ os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "minio123")
 
 logger = structlog.get_logger(__name__)
 
-INFERENCE_DELAY_SEC = float(os.getenv("INFERENCE_DELAY_SEC", "0.5"))
+INFERENCE_DELAY_SEC = capacity.inference_delay_sec()
 MLFLOW_MODEL_URI = os.getenv("MLFLOW_MODEL_URI", "models:/Dota2WinPredictor@champion")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-CONCURRENCY_LIMIT = int(os.getenv("CONCURRENCY_LIMIT", "1"))
+CONCURRENCY_LIMIT = capacity.concurrency()
+BATCH_SIZE = capacity.batch_size()
+BATCH_MAX_WAIT_SEC = float(os.getenv("BATCH_MAX_WAIT_SEC", "0.05"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 HEALTH_PORT = int(os.getenv("WORKER_HEALTH_PORT", "8081"))
 
 executor = ThreadPoolExecutor(max_workers=CONCURRENCY_LIMIT)
-semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+semaphore = asyncio.Semaphore(PREFETCH_COUNT)
 stop_event = asyncio.Event()
 in_flight = 0
 model = None
@@ -97,9 +102,19 @@ async def load_model() -> None:
     logger.info("model_loaded_successfully")
 
 
-def _predict_sync(features: pd.DataFrame) -> int:
+def _predict_batch_sync(rows: Sequence[dict[str, float]]) -> list[int]:
     time.sleep(INFERENCE_DELAY_SEC)
-    return int(model.predict(features)[0])
+    predictions = model.predict(pd.DataFrame(list(rows)))
+    return [int(value) for value in predictions]
+
+
+batcher = MicroBatcher(
+    _predict_batch_sync,
+    max_batch_size=BATCH_SIZE,
+    max_wait_sec=BATCH_MAX_WAIT_SEC,
+    max_parallel_batches=CONCURRENCY_LIMIT,
+    executor_factory=lambda: executor,
+)
 
 
 @broker.subscriber(queue=MAIN_QUEUE)
@@ -112,19 +127,14 @@ async def process_task(msg: TaskMessage) -> None:
         try:
             logger.info("task_received", task_id=msg.task_id, attempt=msg.attempt)
 
-            features = pd.DataFrame(
-                [
-                    {
-                        "duration": msg.duration,
-                        "radiant_score": msg.radiant_score,
-                        "dire_score": msg.dire_score,
-                        "first_blood_time": msg.first_blood_time,
-                    }
-                ]
-            )
+            features = {
+                "duration": msg.duration,
+                "radiant_score": msg.radiant_score,
+                "dire_score": msg.dire_score,
+                "first_blood_time": msg.first_blood_time,
+            }
 
-            loop = asyncio.get_running_loop()
-            prediction = await loop.run_in_executor(executor, _predict_sync, features)
+            prediction = await batcher.submit(features)
             inserted = await save_result(msg.task_id, prediction)
 
             logger.info(
@@ -208,6 +218,9 @@ async def main() -> None:
         max_size=MAX_QUEUE_SIZE,
         prefetch=PREFETCH_COUNT,
         workers=CONCURRENCY_LIMIT,
+        batch_size=BATCH_SIZE,
+        worker_rate=capacity.worker_rate(),
+        replicas=capacity.replicas(),
     )
 
     await stop_event.wait()
@@ -223,6 +236,7 @@ async def main() -> None:
     if in_flight > 0:
         logger.warning("shutdown_timeout_waiting_in_flight", in_flight=in_flight)
 
+    await batcher.aclose()
     await runner.cleanup()
     executor.shutdown(wait=True)
 
@@ -231,3 +245,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

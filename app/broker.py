@@ -3,10 +3,12 @@ import os
 
 from faststream.rabbit import RabbitBroker
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://rabbit:rabbit@localhost:5672/")
-PREFETCH_COUNT = int(os.getenv("PREFETCH_COUNT", "1"))
+from app.capacity import prefetch_count
 
-broker = RabbitBroker(RABBITMQ_URL)
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://rabbit:rabbit@localhost:5672/")
+PREFETCH_COUNT = prefetch_count()
+
+broker = RabbitBroker(RABBITMQ_URL, logger=None)
 
 with contextlib.suppress(AttributeError, TypeError):
     broker.prefetch_count = PREFETCH_COUNT

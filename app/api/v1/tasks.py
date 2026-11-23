@@ -1,25 +1,19 @@
-import os
 import uuid
 
 from aio_pika.exceptions import DeliveryError
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app import capacity
 from app.broker import broker
 from app.db.results import get_result
-from app.queues import MAIN_QUEUE, MAX_QUEUE_SIZE
+from app.queues import MAIN_QUEUE
 
-INFERENCE_DELAY_SEC = float(os.getenv("INFERENCE_DELAY_SEC", "0.5"))
-CONCURRENCY_PER_WORKER = int(os.getenv("CONCURRENCY_LIMIT", "1"))
-WORKER_REPLICAS = int(os.getenv("WORKER_REPLICAS", "1"))
-RETRY_AFTER_SECONDS_ENV = int(os.getenv("RETRY_AFTER_SECONDS", "0"))
-
-THROUGHPUT = CONCURRENCY_PER_WORKER * WORKER_REPLICAS / INFERENCE_DELAY_SEC
-
-if RETRY_AFTER_SECONDS_ENV > 0:
-    RETRY_AFTER_SEC = RETRY_AFTER_SECONDS_ENV
-else:
-    RETRY_AFTER_SEC = max(1, round(MAX_QUEUE_SIZE / THROUGHPUT))
+INFERENCE_DELAY_SEC = capacity.inference_delay_sec()
+CONCURRENCY_PER_WORKER = capacity.concurrency()
+WORKER_REPLICAS = capacity.replicas()
+THROUGHPUT = capacity.total_rate()
+RETRY_AFTER_SEC = capacity.retry_after_sec()
 
 router = APIRouter(tags=["tasks"])
 

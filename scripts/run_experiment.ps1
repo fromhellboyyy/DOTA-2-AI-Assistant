@@ -1,8 +1,8 @@
 $TAGS = @(
     @{ tag = "baseline_stopped"; size = "100000"; scale = 1; phase = "stopped" },
-    @{ tag = "bp_stopped";       size = "20";     scale = 1; phase = "stopped" },
-    @{ tag = "bp_live_1w";       size = "20";     scale = 1; phase = "live" },
-    @{ tag = "bp_live_2w";       size = "20";     scale = 2; phase = "live" }
+    @{ tag = "bp_stopped";       size = "auto";   scale = 1; phase = "stopped" },
+    @{ tag = "bp_live_1w";       size = "auto";   scale = 1; phase = "live" },
+    @{ tag = "bp_live_2w";       size = "auto";   scale = 2; phase = "live" }
 )
 
 $EXCLUDE_SERVICES = @("worker", "producer", "app")
@@ -142,7 +142,7 @@ function Print-WorkerDiagnostics {
         $x = "$id".Trim()
 
         if ($x) {
-            $py = "import os; print('PREFETCH_COUNT=' + os.getenv('PREFETCH_COUNT', 'unset')); print('CONCURRENCY_LIMIT=' + os.getenv('CONCURRENCY_LIMIT', 'unset'))"
+            $py = "import os; print('PREFETCH_COUNT=' + os.getenv('PREFETCH_COUNT', 'unset')); print('CONCURRENCY_LIMIT=' + os.getenv('CONCURRENCY_LIMIT', 'unset')); print('BATCH_SIZE=' + os.getenv('BATCH_SIZE', 'unset'))"
             Invoke-Docker @("exec", "-T", $x, "python", "-c", $py) -IgnoreExit | ForEach-Object { Write-Host "$_" }
         }
     }
@@ -159,8 +159,20 @@ function Print-WorkerDiagnostics {
     ) -IgnoreExit | ForEach-Object { Write-Host "$_" }
 }
 
-function Set-QueuePolicy($size) {
-    & uv run python scripts/set_policy.py --size $size
+function Get-QueueLimit {
+    $out = & uv run python -m app.capacity limit
+    if ($LASTEXITCODE -ne 0) {
+        throw "capacity limit failed"
+    }
+    return [int](($out | Select-Object -Last 1).ToString().Trim())
+}
+
+function Set-QueuePolicy($size, $reject) {
+    $pargs = @("run", "python", "scripts/set_policy.py", "--size", $size)
+    if ($reject) {
+        $pargs += "--reject"
+    }
+    & uv @pargs
     if ($LASTEXITCODE -ne 0) {
         throw "set_policy failed"
     }
@@ -268,7 +280,18 @@ foreach ($cfg in $TAGS) {
 
     Write-Host "=== $tag (size=$($cfg.size), scale=$($cfg.scale), phase=$($cfg.phase)) ==="
 
-    $env:MAX_QUEUE_SIZE = $cfg.size
+    $env:WORKER_REPLICAS = "$($cfg.scale)"
+
+    if ($cfg.size -eq "auto") {
+        Remove-Item Env:MAX_QUEUE_SIZE -ErrorAction SilentlyContinue
+        $isLimited = $true
+    } else {
+        $env:MAX_QUEUE_SIZE = $cfg.size
+        $isLimited = $false
+    }
+
+    $limit = Get-QueueLimit
+    Write-Host "[$tag] queue limit = $limit (replicas=$($cfg.scale))"
 
     Reset-Cold-Rabbit-Warm-MLflow
 
@@ -281,7 +304,7 @@ foreach ($cfg in $TAGS) {
 
     Wait-MlflowReady
 
-    Set-QueuePolicy $cfg.size
+    Set-QueuePolicy $limit $isLimited
 
     Invoke-Docker @(
         "compose", "up", "-d",
@@ -314,7 +337,7 @@ foreach ($cfg in $TAGS) {
     $logErr = "logs_$tag.err"
 
     Start-Process docker `
-        -ArgumentList "compose", "run", "--rm", "-e", "MAX_QUEUE_SIZE=$($cfg.size)", "producer" `
+        -ArgumentList "compose", "run", "--rm", "-e", "WORKER_REPLICAS=$($cfg.scale)", "producer" `
         -RedirectStandardOutput $logOut `
         -RedirectStandardError $logErr `
         -NoNewWindow
@@ -357,7 +380,7 @@ foreach ($cfg in $TAGS) {
         throw "[$tag] no final depth from rabbitmqctl, abort."
     }
 
-    if ($cfg.phase -eq "stopped" -and $cfg.size -eq "100000") {
+    if ($cfg.phase -eq "stopped" -and -not $isLimited) {
         if ($final -lt 21 -or $published -ne 88) {
             Write-Host "--- diagnostics on baseline stopped failure ---"
             Print-Diagnostics
@@ -367,13 +390,13 @@ foreach ($cfg in $TAGS) {
         }
     }
 
-    if ($cfg.phase -eq "stopped" -and $cfg.size -eq "20") {
-        if ($final -lt 1 -or $final -gt 20 -or $nacks -lt 1) {
+    if ($cfg.phase -eq "stopped" -and $isLimited) {
+        if ($final -lt 1 -or $final -gt $limit -or $nacks -lt 1) {
             Write-Host "--- diagnostics on bp stopped failure ---"
             Print-Diagnostics
             Write-Host "--- producer log tail ---"
             Get-Content $logOut -Tail 60 | ForEach-Object { Write-Host "$_" }
-            throw "[$tag] bp stopped must clamp at 20 with rejections (got final=$final nacks=$nacks published=$published)."
+            throw "[$tag] bp stopped must clamp at $limit with rejections (got final=$final nacks=$nacks published=$published)."
         }
     }
 
@@ -407,6 +430,7 @@ foreach ($cfg in $TAGS) {
 }
 
 Remove-Item Env:MAX_QUEUE_SIZE -ErrorAction SilentlyContinue
+Remove-Item Env:WORKER_REPLICAS -ErrorAction SilentlyContinue
 
 & uv run python scripts/report.py
 if ($LASTEXITCODE -ne 0) {
