@@ -21,6 +21,8 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.28.0",
     "opentelemetry-instrumentation-fastapi>=0.49b0",
     "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
+    "pydantic-ai-slim[openai]>=2.68.0",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.optional-dependencies]
@@ -80,6 +82,10 @@ known-first-party = ["app"]
     "SIM105",
     "E501",
 ]
+"agent/**" = ["RUF001", "RUF002", "RUF003", "E501", "T201", "N818"]
+"tests/test_agent_*.py" = ["RUF001", "RUF002", "RUF003", "E501"]
+
+
 
 [tool.ruff.format]
 quote-style = "double"

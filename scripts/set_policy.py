@@ -23,16 +23,11 @@ def rabbit_ctl(*args):
     )
 
 
-def build_definition(size: int) -> str:
-    if size == 20:
-        definition = {
-            "max-length": 20,
-            "overflow": "reject-publish",
-        }
-    else:
-        definition = {
-            "max-length": size,
-        }
+def build_definition(size: int, reject: bool) -> str:
+    definition: dict[str, object] = {"max-length": size}
+
+    if reject:
+        definition["overflow"] = "reject-publish"
 
     return json.dumps(definition, separators=(",", ":"))
 
@@ -40,9 +35,10 @@ def build_definition(size: int) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--size", required=True, type=int)
+    parser.add_argument("--reject", action="store_true")
     args = parser.parse_args()
 
-    definition = build_definition(args.size)
+    definition = build_definition(args.size, args.reject)
 
     rabbit_ctl("clear_policy", POLICY_NAME)
 
