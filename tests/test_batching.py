@@ -122,3 +122,21 @@ async def test_wrong_prediction_count_falls_back_to_single_calls(executor):
 
     assert results[0] == 1
     assert results[1] == 1
+
+
+async def test_batch_logs_do_not_inherit_first_caller_context(executor):
+    import contextvars
+
+    marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default="none")
+    seen: list[str] = []
+
+    def predict(rows):
+        seen.append(marker.get())
+        return [0 for _ in rows]
+
+    batcher = MicroBatcher(predict, 2, 0.05, 1, lambda: executor)
+    marker.set("first-caller")
+    await batcher.submit({"x": 1})
+    await batcher.aclose()
+
+    assert seen == ["none"]

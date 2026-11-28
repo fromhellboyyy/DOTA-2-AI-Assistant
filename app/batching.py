@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 from collections.abc import Callable, Sequence
 from concurrent.futures import Executor
 from typing import Any
@@ -41,7 +42,10 @@ class MicroBatcher:
             self._queue = asyncio.Queue()
             self._slots = asyncio.Semaphore(self._max_parallel)
             self._batches = set()
-            self._runner = loop.create_task(self._run(self._queue, self._slots))
+            self._runner = loop.create_task(
+                self._run(self._queue, self._slots),
+                context=contextvars.Context(),
+            )
 
         return self._queue
 
